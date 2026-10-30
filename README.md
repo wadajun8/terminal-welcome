@@ -114,6 +114,36 @@
 | `tools/gen_tunnel.py` | 光のトンネル（虹色の輪と白い光の筋）のコマを、窓に合わせた 16:9 の大きさで ANSI として生成する（numpy を使う）。`welcome.sh` が `~/.cache/terminal-welcome/` に保存して使い回す |
 | `demo/palettes.sh` | `welcome.sh` の配色案（7案）を1つずつ表示して見比べる |
 
+## 入れ方
+1. このリポジトリを `~/terminal-welcome` に置く（`git clone git@github.com:wadajun8/terminal-welcome.git ~/terminal-welcome`）
+2. 光の演出には `python3` と numpy、大きな文字には `toilet` を使う（なくても、演出や大きな文字を省いて動く）
+3. `~/.bashrc` の末尾に次のブロックを足す（今使っているもの。消すときはこの範囲を削除する）
+
+```bash
+# >>> terminal-welcome >>>
+# ウェルカム画面（~/terminal-welcome）。起動（再起動）して最初の1回だけフル演出、2回目以降は1行の要約
+# 対話シェルで、端末につながっていて、入れ子のシェル（bash や sudo -s）でないときだけ出す
+if [[ $- == *i* && -t 1 && ${SHLVL:-1} -le 1 && -r ~/terminal-welcome/welcome.sh ]]; then
+  __welcome_stamp=~/.cache/terminal-welcome-last
+  # 起動ごとに変わる ID（boot_id）を記録しておき、同じなら2回目以降とみなす
+  __welcome_boot=$(</proc/sys/kernel/random/boot_id)
+  if [[ $(cat "$__welcome_stamp" 2>/dev/null) == "$__welcome_boot" ]]; then
+    WELCOME_LINE=1 bash ~/terminal-welcome/welcome.sh
+  else
+    mkdir -p ~/.cache && echo "$__welcome_boot" >"$__welcome_stamp"
+    bash ~/terminal-welcome/welcome.sh
+  fi
+  unset __welcome_stamp __welcome_boot
+fi
+# <<< terminal-welcome <<<
+```
+
+`--auto` を使えば、同じことを1行で書ける（起動したかどうかの記録は `~/.cache/terminal-welcome/boot` に変わる）。
+
+```bash
+[[ $- == *i* && -t 1 && ${SHLVL:-1} -le 1 ]] && bash ~/terminal-welcome/welcome.sh --auto
+```
+
 ## 試し方
 ```bash
 bash ~/terminal-welcome/welcome.sh          # 今のウィンドウの大きさで表示
