@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 # ターミナル・ウェルカム画面（リンクスタート風）
-#   窓の横幅に合わせた 16:9 の範囲で、虹色の輪と白い光の筋が中心から外へ加速しながら広がる（前へ進む感覚）
-#   → 白い光で真っ白になって消える → その場所に「WELCOME TO YOUR WORLD」が大きくフェードイン
-#   → その下に、PC の機種名だけの細い長方形が出て縦に伸びる（大きな文字と四角を合わせて、光と同じ 16:9）
-#   → ゲージと文字が出る → ゲージが貯まる → 日付 → ALL SYSTEMS GO
-#   光のコマは tools/gen_tunnel.py が窓の大きさごとに作り、~/.cache/terminal-welcome/ に保存して使い回す
-#   光が入らない（狭い、python3 がない）: 四角だけ（狭ければバーを縮める） / それも無理: 1行の要約
+#   「WELCOME TO YOUR WORLD」が大きくフェードインするのと同時に、その下の四角が中心から縦と横へ広がる
+#   （大きな文字と四角を合わせて、窓の横幅に合わせた 16:9）→ PC の機種名とゲージが出る → ゲージが貯まる → 日付 → ALL SYSTEMS GO
+#   （リンクスタート風の光の演出 tunnel_play は、いまは止めている。full() の中のコメントを外せば戻る）
+#   16:9 が入らない: 四角だけ（狭ければバーを縮める） / それも無理: 1行の要約
 #   演出中に何かキーを押すと、残りを飛ばして最後の画面を即表示する
 #   使い方: welcome.sh [--full | --line | --auto]
 #     --full（既定）: 演出つき / --line: 1行の要約だけ（軽い。ターミナルを開くたびに出す用）
@@ -258,31 +256,27 @@ banner_draw() {  # $1=行頭 $2=色（省略すると四角のタイトルと同
   for line in "${BANNER[@]}"; do printf '%s%s%s%s%s\n' "$1" "${F[${2:-$C_TITLE}]}" "$BOLD" "$line" "$R"; done
 }
 
-banner_fade() {  # $1=行頭。大きな文字を暗い灰色から順に塗り直してフェードインさせる。カーソルは文字の下に置く
-  local col first=1
-  for col in 236 238 241 245 ""; do
-    (( first )) || printf '\033[%dA' "${#BANNER[@]}"
-    first=0
-    banner_draw "$1" "$col"
-    pause 0.05
+intro() {  # $1=四角の左端の列 $2=大きな文字の行頭 $3=文字と四角の間の行数
+  # 大きな文字のフェードインと同時に、枠だけの四角を中心から縦と横へ同時に広げる。カーソルは四角の上端に置く
+  local n=8 k i fade=(236 238 241 245 "") bw=$(( W + 27 )) ww hh off col gap=0 lines BOX_TITLE= BOTTOM_LINE
+  (( ${#BANNER[@]} )) && gap=$3
+  lines=$(( ${#BANNER[@]} + gap + BOX_H ))
+  for ((i = 0; i < lines; i++)); do echo; done
+  printf '\033[%dA' "$lines"
+  for ((k = 1; k <= n; k++)); do
+    (( SKIP )) && k=$n  # キーが押されたら最後のコマへ
+    col=${fade[(k - 1) * 4 / (n - 1)]}
+    (( ${#BANNER[@]} )) && banner_draw "$2" "$col"
+    ww=$(( 2 + (bw - 2) * k / n )) hh=$(( 2 + (BOX_H - 2) * k / n ))
+    off=$(( gap + (BOX_H - hh) / 2 ))  # 四角の上端までの行数（縦も中心から広がるように）
+    for ((i = 0; i < off; i++)); do echo; done
+    local W=$(( ww - 27 ))  # box_shell は W から幅を決めるので、このコマの幅に合わせる
+    hline BOTTOM_LINE $(( ww - 2 ))
+    box_shell $'\033['"$(( $1 + (bw - ww) / 2 ))G" $(( hh - 2 )) "$col"
+    printf '\033[%dA' $(( ${#BANNER[@]} + off + hh ))  # 次のコマのために一番上へ戻る
+    pause 0.03
   done
-}
-
-box_grow() {  # $1=行頭。細い長方形（タイトルがあればタイトルだけ）をフェードインさせ、中身の行数まで縦に伸ばす。カーソルは四角の上端に戻す
-  local col k i
-  hline TOP_LINE $(( W + 22 - ${#BOX_TITLE} ))
-  hline BOTTOM_LINE $(( W + 25 ))
-  for col in 236 238 240 243 "" ; do       # 細い長方形（上下の線だけ）のフェードイン
-    box_shell "$1" 0 "$col"
-    printf '\033[2A'
-    pause 0.05
-  done
-  for ((k = 1; k <= BOX_H - 2; k++)); do  # 1行ずつ縦に伸びる
-    (( SKIP )) && k=$(( BOX_H - 2 ))
-    box_shell "$1" "$k"
-    printf '\033[%dA' $(( k + 2 ))
-    pause 0.04
-  done
+  for ((i = 0; i < ${#BANNER[@]} + gap; i++)); do echo; done
 }
 
 box_top() {  # $1=行頭 $2=タイトル（崩した文字でもよい）。BOX_TITLE が空なら線だけ
@@ -342,7 +336,8 @@ full() {  # 演出つき。光 → 大きな文字 → 四角 → ゲージ → 
   fi
   fx_size
   echo
-  if tunnel_play; then
+  # if tunnel_play; then  # ソードアート・オンライン風の光の演出（いまは止めている。戻すときはこの行を生かし、下の行を消す）
+  if (( FX_W >= 40 && FX_H >= 9 )); then
     # 大きな文字・すき間1行・四角を合わせて、光と同じ FX_W 列 × FX_H 行（16:9）にする。
     # 四角は光と同じ幅にそろえる（バーの長さで調整）。バーが長くても伸びきるまでの時間は変わらないよう、1マスの間隔を縮める
     W=$(( FX_W - 27 ))
@@ -357,7 +352,7 @@ full() {  # 演出つき。光 → 大きな文字 → 四角 → ゲージ → 
     if (( rem >= 2 )); then (( BOX_PAD[0]++, BOX_PAD[5]++ )); rem=$(( rem - 2 )); fi
     gap=$(( gap + rem ))
     BOX_H=$(( BOX_H + extra - rem ))
-  else  # 光を流せない（狭い、python3 がない）ときは四角だけ。大きな文字は入れば出す
+  else  # 16:9 が入らないほど狭いときは四角だけ。大きな文字は入れば出す
     (( COLS - 29 < W )) && W=$(( COLS - 29 ))
     col=3
     banner_make $(( W + 27 )) $(( ROWS - BOX_H - 4 ))
@@ -365,12 +360,8 @@ full() {  # 演出つき。光 → 大きな文字 → 四角 → ゲージ → 
   fi
   pre=$'\033['"${col}G"
   BOX_TITLE=${BOX_TITLE:0:W+18}  # 四角の幅に入りきらないタイトルは切る
-  if (( ${#BANNER[@]} )); then
-    banner_fade $'\033['"$(( col + (W + 27 - BANNER_W) / 2 ))G"
-    for ((i = 0; i < gap; i++)); do echo; done
-  fi
-  collect
-  box_grow "$pre"
+  intro "$col" $'\033['"$(( col + (W + 27 - BANNER_W) / 2 ))G" "$gap"
+  collect  # 四角が広がる間に、nvidia-smi と CPU の計測が進む
   gauges "$pre"
   date_line "$pre"
   go_line "$pre"
