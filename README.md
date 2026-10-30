@@ -1,8 +1,23 @@
 # terminal-welcome
 
-ターミナルを起動したときに表示するウェルカム画面。Claude と一問一答で段階的に設計している。
+ターミナルを開くと、リンクスタート風の光の演出のあとに「WELCOME TO YOUR WORLD」と、**今のマシンの状態（CPU・メモリ・ディスク・GPU・バッテリー）を示すゲージ**が出るウェルカム画面です。bash だけで動きます。
 
-コンセプトは**「リンクスタートのように、自分の世界へ入っていく起動の儀式」**。窓に合わせた 16:9 の範囲で、虹色の輪と白い光の筋が中心から外へ加速しながら広がり（前へ進む感覚）、白い光に包まれて消えたあと、大きな「WELCOME TO YOUR WORLD」と、PC の機種名の四角が現れ、実際のマシンの状態でゲージが貯まって `▲ ALL SYSTEMS GO` で止まる。
+## クイックスタート
+
+```bash
+# 1. 取ってくる
+git clone https://github.com/wadajun8/terminal-welcome.git ~/terminal-welcome
+
+# 2. 試しに表示する
+bash ~/terminal-welcome/welcome.sh
+
+# 3. ターミナルを開いたときに出るようにする（~/.bashrc の末尾に1行足す）
+echo '[[ $- == *i* && -t 1 && ${SHLVL:-1} -le 1 ]] && bash ~/terminal-welcome/welcome.sh --auto' >> ~/.bashrc
+```
+
+3 の設定では、**PC を起動して最初に開いたときだけ演出つき**、2回目以降は1行の要約だけが出ます（何度開いても待たされません）。演出中は**何かキーを押すとすぐ最後の画面に飛びます**。
+
+## 画面の例
 
 ```
 
@@ -26,131 +41,77 @@
   //2026-10-30 FRI ── 22:14:27
   ▲ ALL SYSTEMS GO
 ```
-（実際は色つき。四角のタイトルは PC の機種名。窓の大きさで、文字と四角の大きさが変わる）
 
-## 進み具合
+実際は色つきで、光の輪が広がる → 文字がフェードイン → 四角が伸びてゲージが貯まる、という順に動きます（約2.7秒）。四角のタイトルにはその PC の機種名が入ります。
 
-| フェーズ | 内容 | 状態 |
+2回目以降に出る1行の要約：
+
+```
+▲ CPU 3%  MEM 16%  DISK 56%  GPU 50C  BAT 95%  10/30 15:02
+```
+
+## 表示されるもの
+
+| 項目 | ゲージ | WARNING になる条件 |
 |---|---|---|
-| 1 | 体験（UX）の定義 | 完了 |
-| 2 | 表示する情報の整理 | 完了 |
-| 3 | 世界観・配色 | 完了 |
-| 4 | レイアウト・プロトタイプ | 完了 |
-| 5 | `~/.bashrc` への組み込み | **途中**（表示の頻度を決めた） |
+| CPU | 使用率 | — |
+| MEM | 使用率 | 90% 以上 |
+| DISK | `/` の使用率 | 90% 以上 |
+| GPU | VRAM の使用率（右に温度） | 85℃ 以上 |
+| BAT | 残量（AC 電源につながっていれば `AC`） | 20% 以下で AC 電源なし |
 
-## 決定事項
+WARNING があると、最後の行が `▲ N WARNING(S)` になります。GPU やバッテリーがない PC では、その行は `OFFLINE` になります。
 
-### フェーズ1：体験
-- **起動したときの気分：高揚感・始動感**（「静かな集中」「状況把握」「遊び心」より、作業を始める勢いを優先）
-- **演出の長さ：約1秒**。ただし**キーを押せば即スキップ**して最後の画面を出す。毎回待たされるストレスをなくすため
+## 必要なもの
 
-### フェーズ2：表示する情報
-- 表示するのは **マーク・日付と時刻・起動シークエンス（計器）** だけ
-- 不採用：
-  - MISSION（作業の続き）と TODO：情報をどこから取るか（git の自動取得か、手書きのファイルか）を決めると管理の手間が出るため
-  - 一言メモ：同じく管理の手間を増やさないため
-  - 「ユーザー名-OS」のような名前の文字：ダサいため
-
-### フェーズ3：世界観・配色
-- **計器（B案）を骨組みに、サイバーパンク（A案）のネオン配色を合わせる**。グリッチ（ノイズで文字が崩れる演出）は、タイトルと最後の行にだけ使う
-- 配色：**tron**（青一色の電子回路）。256色の番号で、枠 24、ゲージ 45、ラベルと CHECKING 31、NOMINAL 白 255（太字）、タイトルと GO 51、WARNING オレンジ 208、マーク 51
-  - フェーズ4で7案（neon / synthwave / tron / matrix / akira / vapor / amber）を `demo/palettes.sh` で見比べて決めた。最初のネオン配色（枠 紫・ゲージ シアン・見出し マゼンタ）は `PALETTE=neon` で残してある
-  - 青一色の中で WARNING を目立たせるため、警告だけ補色に近いオレンジにしている
-- **ゲージには実際の値を出す**（飾りではなく、本当のセルフチェックにする）
-  - CPU：`/proc/stat` を2回読んで使用率を計算
-  - MEM：`/proc/meminfo`（MemTotal − MemAvailable）
-  - DISK：`df -P /`
-  - GPU：ゲージは VRAM 使用率、右側の文字は温度。`nvidia-smi` は遅いので、最初に裏で走らせて待ち時間を演出で隠す
-  - BAT：残量と AC 電源の有無
-  - 不採用：ROS 環境、Docker のコンテナ数
-- **WARNING（赤）の初期しきい値**：DISK・MEM 90%以上、BAT 20%以下かつ AC 電源なし、GPU 85℃以上。WARNING があると最後の行が `▲ N WARNING(S)` になる
-
-### フェーズ4：レイアウト（リンクスタート風）
-- 順番：**光の円（16:9）が外へ加速 → 白く光って消える → 大きな文字がフェードイン → 細い長方形が縦に伸びる → ゲージと文字が出て貯まる → 日付 → ALL SYSTEMS GO**
-  - 「リンクスタートのあとの起動っぽく」というユーザーの希望から。光は、自分が前へ進むなら外へ流れるはず、という指摘で外向きにした
-  - 光の範囲は、窓の横幅（左右2文字の余白）に合わせた 16:9。下に日付などが入るよう高さを残し、足りなければ幅を縮めて中央にそろえる
-  - 光の見た目は「一番最初の円」（画面全体に虹色の輪が並び、白い光の筋とともに流れる）。七色の線だけ・輪と線の両方も試したが、輪がよいとのこと
-  - 輪は 1コマで輪の間隔近く進むと逆に戻って見えるので、進む量を抑えている（`tools/gen_tunnel.py` の `TRAVEL` と `DENSITY`）。加速の時間は「半分の長さで」とのことで、1コマ 0.02 秒（`FX_STEP`）
-  - 光のコマは窓の大きさごとに `tools/gen_tunnel.py`（numpy）が作り、`~/.cache/terminal-welcome/` に保存して使い回す（新しい5つだけ残す）。初めての大きさだけ約0.2秒多くかかる
-- **大きな文字**：「WELCOME TO / YOUR WORLD」（「あなたの世界へ」から）。`toilet` の mono9 で2行 → 入らなければ future で1行 → 普通の文字。色は四角と統一（タイトルの色）。`BANNER_TEXT` で変えられる
-- **四角**：タイトルは **この PC の機種名**（`/sys/class/dmi/id/product_family` など。取れなければ OS の名前）。PRE-FLIGHT CHECK は飛ぶわけではないのでやめた。ホスト名はユーザー名などを含むことがあるので使わない
-  - 最初はタイトルだけの細い長方形（上下の線）で、1行ずつ縦に伸びてから中身が出る
-  - **大きな文字と四角を合わせて、光と同じ 16:9** にする。幅はバーの長さで、高さは四角の中のすき間で合わせる。すき間は上端・ゲージの間・下端に上下対称に配る
-  - バーが長くても伸びきる時間が変わらないよう、1マスの間隔を縮める（`GAUGE_STEP` = 0.6 ÷ バーの長さ）
-- 光が入らない（狭い、`python3` がない）ときは四角だけ。四角も入らなければ1行の要約（例：`▲ CPU 6%  MEM 22%  DISK 56%  GPU 56C  BAT 95% AC  10/30 14:12`）
-- キーを押すと、残りを飛ばして最後の画面になる（約0.4秒）。演出中は打ったキーを画面に出さない（絵が崩れないように）
-- 所要時間：キーなしで約2.7秒
-- 高速化：0〜255番の色コードを配列 `F` に最初に1回だけ作る（描画のたびにサブシェルで作ると約0.5秒かかっていた）
-- **不採用にしたマーク**
-  - ドット絵のレーダー（`tools/gen_radar.py`）：外周の円・十字線の上をビームが回り、緑のブリップが光る。最後は左右対称の絵で止まる。縦横比 `ASPECT` = 1.25 の補正（`demo/aspect.sh` で選んだ）はリンクスタート風でもそのまま使っている。リンクスタート風に置き換えた
-  - Ubuntu ロゴ：最初の仮のマーク
-  - 噛み合う2つの歯車：歯数やなめらかさの改善を重ねたが、16行の解像度では歯の凹凸がきれいに出ず、やめた（`tools/gen_gears.py`、`tools/teeth_compare.png`）
-  - 円の中の J：最後の絵として試したが、いらないとのこと
-
-### フェーズ5：`~/.bashrc` への組み込み（途中）
-- **表示の頻度：PC を起動（再起動）して最初の1回だけフル演出、2回目以降は1行の要約だけ**（例：`▲ CPU 3%  MEM 16%  DISK 56%  GPU 50C  BAT 95%  10/30 15:02`）。起動の儀式と日常の作業を分け、何十回も開くたびに待たされないようにするため
-
-## マシン環境（2026-10-30 時点）
-- ノートPC：`BAT0` と `AC0` あり
-- GPU：NVIDIA GeForce RTX 3050 Laptop（VRAM 4GB）
-- 16コア、メモリ 14GiB、ディスク 787G
-- シェルは bash。`tmux` はなし
-
-## ファイル
-
-| ファイル | 内容 |
-|---|---|
-| `tools/gen_radar.py` | （不採用）レーダーのマークを生成する。`--bash` で `welcome.sh` に貼る配列、`--png 出力.png` で確認用の画像、`--aspect-test` で縦横比の試し描きを出力する |
-| `demo/aspect.sh` | 端末の文字の縦横比を測り、レーダーが真円に見える `ASPECT` を選ぶ |
-| `tools/gen_gears.py` | （不採用）歯車のマークを生成していたスクリプト |
-| `12122.png` | （不採用）歯車のマークの参考画像。出どころが分からないため、リポジトリには含めない |
-| `tools/teeth_compare.png` | （不採用）歯車の歯の数（10/7・8/6・8/5・6/4）の比較画像 |
-| `tools/check/` | 変更後の確認用スクリプト（最終画面の再現、色つき画像、疑似端末での所要時間） |
-| `welcome.sh` | 本体。`--full`（演出つき）/ `--line`（1行の要約）/ `--auto`（起動して最初の1回だけ演出）。`--help` で使い方。`~/.bashrc` の `# >>> terminal-welcome >>>` 〜 `# <<< terminal-welcome <<<` から呼ばれる |
-| `demo/lib.sh` | 共通処理：色、キーでスキップできる待機 `pause`、タイプ表示 |
-| `demo/a_cyberpunk.sh` 〜 `d_minimal.sh` | フェーズ3で見比べた4つの世界観 |
-| `demo/e_neon_cockpit.sh` | 採用した組み合わせ（計器＋ネオン）。値はまだ飾り |
-| `demo/all.sh` | A〜E を順に流す |
-| `tools/gen_tunnel.py` | 光のトンネル（虹色の輪と白い光の筋）のコマを、窓に合わせた 16:9 の大きさで ANSI として生成する（numpy を使う）。`welcome.sh` が `~/.cache/terminal-welcome/` に保存して使い回す |
-| `demo/palettes.sh` | `welcome.sh` の配色案（7案）を1つずつ表示して見比べる |
-| `LICENSE` | MIT License（著作権者 Junya Wada） |
-
-## 入れ方
-1. このリポジトリを `~/terminal-welcome` に置く（`git clone git@github.com:wadajun8/terminal-welcome.git ~/terminal-welcome`）
-2. 光の演出には `python3` と numpy、大きな文字には `toilet` を使う（なくても、演出や大きな文字を省いて動く）
-3. `~/.bashrc` の末尾に次のブロックを足す（今使っているもの。消すときはこの範囲を削除する）
+- **bash**（Linux。値は `/proc` や `/sys` から読みます）
+- あるとよいもの（なくても、その部分を省いて動きます）
+  - `python3` と numpy：光の演出
+  - `toilet`：大きな文字（なければ普通の文字）
+  - `nvidia-smi`：GPU のゲージ
 
 ```bash
-# >>> terminal-welcome >>>
-# ウェルカム画面（~/terminal-welcome）。起動（再起動）して最初の1回だけフル演出、2回目以降は1行の要約
-# 対話シェルで、端末につながっていて、入れ子のシェル（bash や sudo -s）でないときだけ出す
-if [[ $- == *i* && -t 1 && ${SHLVL:-1} -le 1 && -r ~/terminal-welcome/welcome.sh ]]; then
-  __welcome_stamp=~/.cache/terminal-welcome-last
-  # 起動ごとに変わる ID（boot_id）を記録しておき、同じなら2回目以降とみなす
-  __welcome_boot=$(</proc/sys/kernel/random/boot_id)
-  if [[ $(cat "$__welcome_stamp" 2>/dev/null) == "$__welcome_boot" ]]; then
-    WELCOME_LINE=1 bash ~/terminal-welcome/welcome.sh
-  else
-    mkdir -p ~/.cache && echo "$__welcome_boot" >"$__welcome_stamp"
-    bash ~/terminal-welcome/welcome.sh
-  fi
-  unset __welcome_stamp __welcome_boot
-fi
-# <<< terminal-welcome <<<
+sudo apt install python3-numpy toilet   # Ubuntu の場合
 ```
 
-`--auto` を使えば、同じことを1行で書ける（起動したかどうかの記録は `~/.cache/terminal-welcome/boot` に変わる）。
+窓が狭いときは、自動で「四角だけ」→「1行の要約」に切り替わります。
+
+## 使い方
 
 ```bash
-[[ $- == *i* && -t 1 && ${SHLVL:-1} -le 1 ]] && bash ~/terminal-welcome/welcome.sh --auto
+bash ~/terminal-welcome/welcome.sh           # 演出つき（--full と同じ）
+bash ~/terminal-welcome/welcome.sh --line    # 1行の要約だけ
+bash ~/terminal-welcome/welcome.sh --auto    # 起動して最初の1回だけ演出、以降は1行
+bash ~/terminal-welcome/welcome.sh --help    # 使い方
 ```
 
-## 試し方
+### カスタマイズ
+
+環境変数で変えられます。
+
+| 環境変数 | 内容 | 例 |
+|---|---|---|
+| `PALETTE` | 配色。`tron`（既定）/ `neon` / `synthwave` / `matrix` / `akira` / `vapor` / `amber` | `PALETTE=matrix` |
+| `BANNER_TEXT` | 大きく出す言葉（`\|` で2行に分ける） | `BANNER_TEXT='HELLO\|WORLD'` |
+| `BOX_TITLE` | 四角のタイトル（空なら線だけ） | `BOX_TITLE='MY PC'` |
+| `WELCOME_SKIP` | `1` で演出なし（最後の画面だけ） | `WELCOME_SKIP=1` |
+
 ```bash
-bash ~/terminal-welcome/welcome.sh          # 今のウィンドウの大きさで表示
-COLUMNS=60 bash ~/terminal-welcome/welcome.sh   # 縦並びを試す
-bash ~/terminal-welcome/demo/all.sh         # 世界観の候補を見比べる
-bash ~/terminal-welcome/demo/palettes.sh    # 配色の候補を見比べる
-PALETTE=tron bash ~/terminal-welcome/welcome.sh   # 配色を指定して演出つきで見る
+PALETTE=matrix bash ~/terminal-welcome/welcome.sh   # 配色を変えて見る
+bash ~/terminal-welcome/demo/palettes.sh            # 配色を順に見比べる
 ```
-色とアニメーションを見るには、普段のターミナルで実行する（Claude Code の `!` 経由だとうまく表示されない）。
+
+`~/.bashrc` で使うときは、`--auto` の前に書きます（例：`PALETTE=matrix bash ~/terminal-welcome/welcome.sh --auto`）。WARNING のしきい値やゲージの速さは、`welcome.sh` の先頭の「設定」で変えられます。
+
+## アンインストール
+
+1. `~/.bashrc` から、クイックスタートで足した `welcome.sh --auto` の行を消す
+2. ファイルとキャッシュを消す
+
+```bash
+rm -rf ~/terminal-welcome ~/.cache/terminal-welcome
+```
+
+## ライセンス
+
+[MIT License](LICENSE)
