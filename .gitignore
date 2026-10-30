@@ -1,3 +1,9 @@
 __pycache__/
 # 出どころの分からない参考画像（README の「ファイル」を参照）
 12122.png
+# 作業メモと Claude Code 向けの指示書（手元だけで使う）
+MEMO.md
+CLAUDE.md
+NEXT.md
+original-prompt.md
+docs/

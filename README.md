@@ -113,6 +113,7 @@
 | `demo/all.sh` | A〜E を順に流す |
 | `tools/gen_tunnel.py` | 光のトンネル（虹色の輪と白い光の筋）のコマを、窓に合わせた 16:9 の大きさで ANSI として生成する（numpy を使う）。`welcome.sh` が `~/.cache/terminal-welcome/` に保存して使い回す |
 | `demo/palettes.sh` | `welcome.sh` の配色案（7案）を1つずつ表示して見比べる |
+| `LICENSE` | MIT License（著作権者 Junya Wada） |
 
 ## 入れ方
 1. このリポジトリを `~/terminal-welcome` に置く（`git clone git@github.com:wadajun8/terminal-welcome.git ~/terminal-welcome`）
