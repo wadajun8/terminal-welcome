@@ -1,296 +1,54 @@
 #!/usr/bin/env bash
-# ターミナル・ウェルカム画面（プロトタイプ）
-#   マーク（ドット絵のレーダー）がフェードイン → ゲージが実際の値まで伸びる間ビームが回る → 日付 → ALL SYSTEMS GO（ここで止まる）
-#   幅 70 列以上: マークの右にゲージ / 狭い: マークの下にゲージ
-#   マークが入りきらない: ゲージだけ（狭ければバーを縮める） / それも無理: 1行の要約
+# ターミナル・ウェルカム画面（リンクスタート風）
+#   窓の横幅に合わせた 16:9 の範囲で、虹色の輪と白い光の筋が中心から外へ加速しながら広がる（前へ進む感覚）
+#   → 白い光で真っ白になって消える → その場所に「WELCOME TO YOUR WORLD」が大きくフェードイン
+#   → その下に、PC の機種名だけの細い長方形が出て縦に伸びる（大きな文字と四角を合わせて、光と同じ 16:9）
+#   → ゲージと文字が出る → ゲージが貯まる → 日付 → ALL SYSTEMS GO
+#   光のコマは tools/gen_tunnel.py が窓の大きさごとに作り、~/.cache/terminal-welcome/ に保存して使い回す
+#   光が入らない（狭い、python3 がない）: 四角だけ（狭ければバーを縮める） / それも無理: 1行の要約
 #   演出中に何かキーを押すと、残りを飛ばして最後の画面を即表示する
-#   環境変数: PALETTE=<配色名>（下の一覧から）/ WELCOME_SKIP=1 で演出なし / WELCOME_LINE=1 で1行の要約だけ
+#   使い方: welcome.sh [--full | --line | --auto]
+#     --full（既定）: 演出つき / --line: 1行の要約だけ（軽い。ターミナルを開くたびに出す用）
+#     --auto: PC を起動（再起動）して最初の1回だけ --full、2回目以降は --line（~/.cache/terminal-welcome/boot に記録）
+#   環境変数: PALETTE=<配色名>（下の一覧から）/ WELCOME_SKIP=1 で演出なし / WELCOME_LINE=1 で --line と同じ
+#             BANNER_TEXT=<大きく出す言葉>（| で2行に分ける）/ BOX_TITLE=<四角のタイトル>（空なら線だけ）
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$HERE/demo/lib.sh"
 SKIP=${WELCOME_SKIP:-0}
 
 # ── 設定 ──────────────────────────────────────
-# 配色（256色の番号）: 枠 / ゲージ / ラベル / NOMINAL / タイトルと GO / WARNING / マーク
+# 配色（256色の番号）: 枠 / ゲージ / ラベル / NOMINAL / タイトルと GO / WARNING
 case ${PALETTE:-tron} in
-  neon)      read -r C_FRAME C_BAR C_LABEL C_OK C_TITLE C_WARN MARK_COLOR <<<'93 51 213 87 201 196 213' ;;
-  synthwave) read -r C_FRAME C_BAR C_LABEL C_OK C_TITLE C_WARN MARK_COLOR <<<'97 208 205 228 199 196 214' ;;
-  matrix)    read -r C_FRAME C_BAR C_LABEL C_OK C_TITLE C_WARN MARK_COLOR <<<'22 40 28 157 46 196 46' ;;
-  akira)     read -r C_FRAME C_BAR C_LABEL C_OK C_TITLE C_WARN MARK_COLOR <<<'88 203 167 255 196 226 196' ;;
-  vapor)     read -r C_FRAME C_BAR C_LABEL C_OK C_TITLE C_WARN MARK_COLOR <<<'104 159 218 195 213 203 219' ;;
-  amber)     read -r C_FRAME C_BAR C_LABEL C_OK C_TITLE C_WARN MARK_COLOR <<<'130 214 172 230 220 196 208' ;;
-  *)         read -r C_FRAME C_BAR C_LABEL C_OK C_TITLE C_WARN MARK_COLOR <<<'24 45 31 255 51 208 51' ;;  # tron（採用）
+  neon)      read -r C_FRAME C_BAR C_LABEL C_OK C_TITLE C_WARN <<<'93 51 213 87 201 196' ;;
+  synthwave) read -r C_FRAME C_BAR C_LABEL C_OK C_TITLE C_WARN <<<'97 208 205 228 199 196' ;;
+  matrix)    read -r C_FRAME C_BAR C_LABEL C_OK C_TITLE C_WARN <<<'22 40 28 157 46 196' ;;
+  akira)     read -r C_FRAME C_BAR C_LABEL C_OK C_TITLE C_WARN <<<'88 203 167 255 196 226' ;;
+  vapor)     read -r C_FRAME C_BAR C_LABEL C_OK C_TITLE C_WARN <<<'104 159 218 195 213 203' ;;
+  amber)     read -r C_FRAME C_BAR C_LABEL C_OK C_TITLE C_WARN <<<'130 214 172 230 220 196' ;;
+  *)         read -r C_FRAME C_BAR C_LABEL C_OK C_TITLE C_WARN <<<'24 45 31 255 51 208' ;;  # tron（採用）
 esac
 C_DIM=238 C_TEXT=255                 # 空のゲージ・OFFLINE / 数値の文字
 W=12                                # ゲージの長さ
 WARN_MEM=90 WARN_DISK=90             # 以上で WARNING
 WARN_BAT=20                          # 以下かつ AC 電源なしで WARNING
 WARN_GPU_TEMP=85                     # 以上で WARNING（℃）
-WIDE_COLS=77                         # 横並びにする最小の幅
-NARROW_COLS=45                       # 縦並びにする最小の幅
 MIN_W=4                              # 狭いときに縮めるゲージの最短の長さ
-GAUGE_STEP=0.05                      # ゲージが1マス進む間隔（秒）。大きいほどゆっくり
+GAUGE_STEP=0.05                      # ゲージが1マス進む間隔（秒）。光の幅に合わせてバーを伸ばすときは、伸びきる時間が同じになるよう縮める
+FX_STEP=0.02                         # 光のコマの間隔（秒）
 
-# マーク: ドット絵のレーダー。ゲージと最後の文字が出ている間だけビームが回り、文字がすべて出たら止まったときの絵（円と十字線だけ）にする
-# 1文字の上下2ドットを、文字色（A〜G）と背景色（a〜g）で塗り分ける。z は背景色の解除
-#   A=外周の円 B=内側の円と十字線 C=ビーム D=残像（濃） E=残像（薄） F=ブリップ（反応した直後） G=ブリップ（暗く残る）
-# 形を変えるときは tools/gen_radar.py を直して --bash の出力を貼り直す
-# tools/gen_radar.py --aspect 1.25 で生成（16 コマ ＋ 止まったときの絵 × 14 行、幅 33）
-MARK_FRAMES=(
-  '         A▄▄▄d▀▀▀▀c▀z▀▀▀▀▄▄▄         '
-  '      A▄e▀d▀zD███████C█       A▀▀▄      '
-  '   A▄▀e▀zE▀▄▀fD▀b▀▀▀dB▀▀▀zC█B▀▀▀▄▄▄    A▀▀▄   '
-  '  A▄e▀zE▀▄▀▄b▀eB▀zD▀█████C█      B▀▄    A▀▄  '
-  ' A█E▀▄▀▄b▀eB▀zE▀▄▀▄D▀█b▀▀zC█B▄▄      ▀▄    A█ '
-  'A█   E▀B▄▀E▄▀▄▀▄b▀eB▀zD▀█C█  B▀▄     ▀▄    A█'
-  'A█ B▄ ▄█▄ ▄ ▄█bE▀z b▀z C█ B▄ ▄█▄ ▄ ▄█▄ ▄ A█'
-  'A█    B█     ▀▄   ▄   ▄▀     █    A█'
-  'A▀▄    B█      ▀▄▄▄▄▄▀      █    A▄▀'
-  ' A▀▄    B▀bG▀z       B▄       ▄▀    A▄▀ '
-  '   A█     B▀▄▄▄   ▄   ▄▄▄▀     A█   '
-  '    A▀▀▄      B▀▀▀█▀▀▀      A▄▀▀    '
-  '       A▀▀▄▄▄    B▄    A▄▄▄▀▀       '
-  '            A▀▀▀▀▀▀▀▀▀            '
-  '         A▄▄▄▀d▀▀▀b▀d▀▀▀▀z▄▄▄         '
-  '      A▄e▀z▀E▄▀▄▀eD▀z██b▀z████c▀zC▀ A▀▀▄      '
-  '   A▄▀e▀zE▀▄▀G▄bE▀zB▄bE▀eB▀d▀▀z█d▀▀▀cD▀bC▀zB▄    A▀▀▄   '
-  '  A▄▀  E▀▄b▀eB▀zE▀▄▀▄▀D█b▀z██c▀zC▀  B▀▄    A▀▄  '
-  ' A█    B▄▀E▀ ▀▄▀▄b▀D▀▀▀c▀zC▀     B▀▄    A█ '
-  'A█    B▄▀     bE▀eB▀zE▀▄bD▀c▀zC▀B▀▄     ▀▄    A█'
-  'A█ B▄ ▄█▄ ▄ ▄█▄ ▄ cD▀zC▀B▄ ▄█▄ ▄ ▄█▄ ▄ A█'
-  'A█    B█     ▀▄   ▄   ▄▀     █    A█'
-  'A▀▄    B█      ▀▄▄▄▄▄▀      █    A▄▀'
-  ' A▀▄    B▀▄       ▄       ▄▀    A▄▀ '
-  '   A█     B▀▄▄▄   ▄   ▄▄▄▀     A█   '
-  '    A▀▀▄      B▀▀▀█▀▀▀      A▄▀▀    '
-  '       A▀▀▄▄▄    B▄    A▄▄▄▀▀       '
-  '            A▀▀▀▀▀▀▀▀▀            '
-  '         A▄▄▄▀e▀z▀e▀b▀e▀z▀d▀▀z▄▄▄         '
-  '      A▄▀▀E▄▀▄▀▄▀▄b▀z▄▀D█████dA▀▀z▄      '
-  '   A▄▀▀   G▄bE▀zB▄bE▀eB▀z▀e▀z█e▀d▀▀bD▀▀▀f▀z███cA▀z▀▄   '
-  '  A▄▀    B▄▀  E▀▄▀▄b▀z▄D█████dB▀cD▀zC▀▀  A▀▄  '
-  ' A█    B▄▀      bE▀zB▄bE▀zB▄bD▀z██c▀▀zC▀ B▀▄    A█ '
-  'A█    B▄▀     ▄▀E▀▄b▀zD██cB▀bC▀z     B▀▄    A█'
-  'A█ B▄ ▄█▄ ▄ ▄█▄ ▄ cE▀zC▀b▀z B▄█▄ ▄ ▄█▄ ▄ A█'
-  'A█    B█     ▀▄   ▄   ▄▀     █    A█'
-  'A▀▄    B█      ▀▄▄▄▄▄▀      █    A▄▀'
-  ' A▀▄    B▀▄       ▄       ▄▀    A▄▀ '
-  '   A█     B▀▄▄▄   ▄   ▄▄▄▀     A█   '
-  '    A▀▀▄      B▀▀▀█▀▀▀      A▄▀▀    '
-  '       A▀▀▄▄▄    B▄    A▄▄▄▀▀       '
-  '            A▀▀▀▀▀▀▀▀▀            '
-  '         A▄▄▄▀▀▀e▀b▀e▀z▀e▀z▀▄▄▄         '
-  '      A▄▀▀      E▄b▀z▄▀▄▀▄▀▄dA▀▀z▄      '
-  '   A▄▀▀   G▄B▄▄▄▀▀e▀z█e▀z▀e▀bE▀zB▄bE▀zF▄D███dA▀▀z▄   '
-  '  A▄▀    B▄▀      bE▀z▄▀▄▀D▄█dB▀bD▀z████dA▀z▄  '
-  ' A█    B▄▀      ▄▄bE▀zB▄bE▀z▄D█████dB▀cD▀▀▀zC▀▀A█ '
-  'A█    B▄▀     ▄▀  bE▀z▄d▀B▀bD▀c▀▀zC▀▀▀B▀▄    A█'
-  'A█ B▄ ▄█▄ ▄ ▄█▄ ▄ cE▀D▀bC▀z▀b▀zB█▄ ▄ ▄█▄ ▄ A█'
-  'A█    B█     ▀▄   ▄   ▄▀     █    A█'
-  'A▀▄    B█      ▀▄▄▄▄▄▀      █    A▄▀'
-  ' A▀▄    B▀▄       ▄       ▄▀    A▄▀ '
-  '   A█     B▀▄▄▄   ▄   ▄▄▄▀     A█   '
-  '    A▀▀▄      B▀▀▀█▀▀▀      A▄▀▀    '
-  '       A▀▀▄▄▄    B▄    A▄▄▄▀▀       '
-  '            A▀▀▀▀▀▀▀▀▀            '
-  '         A▄▄▄▀▀▀▀b▀z▀▀▀▀▄▄▄         '
-  '      A▄▀▀       B▄   E▀▄▀▄A▀e▀z▄      '
-  '   A▄▀▀   G▄B▄▄▄▀▀▀█▀▀e▀bE▀zB▄bE▀zG▄E▀▄▀eA▀z▀▄   '
-  '  A▄▀    B▄▀      ▄  E▄▀▄▀eB▀bE▀z▄▀D▄dE▀A▀z▄  '
-  ' A█    B▄▀      ▄▄▄▄bE▀z▄▀▄▀▄d▀B▀bD▀z████A█ '
-  'A█    B▄▀     ▄▀  ▄E▄▀eB▀bE▀zD▄████dB▀bD▀z████A█'
-  'A█ B▄ ▄█▄ ▄ ▄█▄ ▄ C▄▄cD▀▀▀B▀D▀▀▀▀▀B▀D▀▀▀▀zA█'
-  'A█    B█     ▀▄   ▄   ▄▀     █    A█'
-  'A▀▄    B█      ▀▄▄▄▄▄▀      █    A▄▀'
-  ' A▀▄    B▀▄       ▄       ▄▀    A▄▀ '
-  '   A█     B▀▄▄▄   ▄   ▄▄▄▀     A█   '
-  '    A▀▀▄      B▀▀▀█▀▀▀      A▄▀▀    '
-  '       A▀▀▄▄▄    B▄    A▄▄▄▀▀       '
-  '            A▀▀▀▀▀▀▀▀▀            '
-  '         A▄▄▄▀▀▀▀b▀z▀▀▀▀▄▄▄         '
-  '      A▄▀▀       B▄       A▀▀▄      '
-  '   A▄▀▀    B▄▄▄▀▀▀█▀▀▀▄▄▄G▄ E▄▀eA▀z▀▄   '
-  '  A▄▀    B▄▀      ▄      e▀bE▀z▄▀▄▀eA▀z▄  '
-  ' A█    B▄▀      ▄▄▄▄▄  E▄▀▄▀eB▀bE▀z▄▀▄▀A█ '
-  'A█    B▄▀     ▄▀  ▄  e▀bE▀z▄▀▄▀▄B▀▄dE▀zD▄dE▀zD▄A█'
-  'A█ B▄ ▄█▄ ▄ ▄█▄ ▄ C▄▄bE▀zD▄bE▀zB█bD▀z█b▀z█b▀zB█bD▀z█b▀z█A█'
-  'A█    B█     ▀▄   ▄ C▀▀b▀cB▀D▀z████B█D████A█'
-  'A▀▄    B█      ▀▄▄▄▄▄▀   C▀▀▀cB▀D▀▀z██a▀zA▀'
-  ' A▀▄    B▀▄       ▄       ▄▀   C▀a▀zA▀ '
-  '   A█     B▀▄▄▄   ▄   ▄▄▄▀     A█   '
-  '    A▀▀▄      B▀▀▀█▀▀▀      A▄▀▀    '
-  '       A▀▀▄▄▄    B▄    A▄▄▄▀▀       '
-  '            A▀▀▀▀▀▀▀▀▀            '
-  '         A▄▄▄▀▀▀▀b▀z▀▀▀▀▄▄▄         '
-  '      A▄▀▀       B▄       A▀▀▄      '
-  '   A▄▀▀    B▄▄▄▀▀▀█▀▀▀▄▄▄G▄   A▀▀▄   '
-  '  A▄▀    B▄▀      ▄      ▀▄    eA▀z▄  '
-  ' A█    B▄▀      ▄▄▄▄▄      e▀z▄E▄▀▄▀A█ '
-  'A█    B▄▀     ▄▀  ▄  ▀▄E▄ ▄▀▄B▀▄E▀▄▀▄A█'
-  'A█ B▄ ▄█▄ ▄ ▄█▄ ▄ C▄E▄B▄E▄b▀zB█bE▀z▄b▀z▄b▀zB█bE▀z▄b▀z▄A█'
-  'A█    B█     ▀▄   ▄C▀▀cD▀b▀dB▀zD██dE▀zD▄dE▀zB█dE▀zD▄dE▀z▄A█'
-  'A▀▄    B█      ▀▄▄▄▄▄▀C▀cD▀▀z███B█D████a▀zA▀'
-  ' A▀▄    B▀▄       ▄      C▀cF▀dB▀zD████a▀zA▀ '
-  '   A█     B▀▄▄▄   ▄   ▄▄▄▀ C▀d▀cD▀z█A█   '
-  '    A▀▀▄      B▀▀▀█▀▀▀      A▄▀▀    '
-  '       A▀▀▄▄▄    B▄    A▄▄▄▀▀       '
-  '            A▀▀▀▀▀▀▀▀▀            '
-  '         A▄▄▄▀▀▀▀b▀z▀▀▀▀▄▄▄         '
-  '      A▄▀▀       B▄       A▀▀▄      '
-  '   A▄▀▀    B▄▄▄▀▀▀█▀▀▀▄▄▄G▄   A▀▀▄   '
-  '  A▄▀    B▄▀      ▄      ▀▄    A▀▄  '
-  ' A█    B▄▀      ▄▄▄▄▄      ▀▄    A█ '
-  'A█    B▄▀     ▄▀  ▄  ▀▄     ▀▄    A█'
-  'A█ B▄ ▄█▄ ▄ ▄█▄ ▄ C▄E▄B▄E▄B▄█▄E▄B▄E▄b▀zB█bE▀z▄b▀z▄A█'
-  'A█    B█     ▀▄   ▄C█dE▀zD▄bE▀eB▀zE▀▄▀▄▀B█E▀▄▀▄A█'
-  'A▀▄    B█      ▀▄▄▄▄C█dB▀zD██dE▀zD▄E▀▄B█E▄▀▄▀A▄▀'
-  ' A▀▄    B▀▄       ▄  C█D████bF▀dB▀E▀zD▄E▀▄a▀zA▀ '
-  '   A█     B▀▄▄▄   ▄   C█bD▀▀dB▀zD█████A█   '
-  '    A▀▀▄      B▀▀▀█▀▀▀ C█D████a▀zA▀▀    '
-  '       A▀▀▄▄▄    B▄    A▄aC▀D▀zA▀▀       '
-  '            A▀▀▀▀▀▀▀▀▀            '
-  '         A▄▄▄▀▀▀▀b▀z▀▀▀▀▄▄▄         '
-  '      A▄▀▀       B▄       A▀▀▄      '
-  '   A▄▀▀    B▄▄▄▀▀▀█▀▀▀▄▄▄    A▀▀▄   '
-  '  A▄▀    B▄▀      ▄      ▀▄    A▀▄  '
-  ' A█    B▄▀      ▄▄▄▄▄      ▀▄    A█ '
-  'A█    B▄▀     ▄▀  ▄  ▀▄     ▀▄    A█'
-  'A█ B▄ ▄█▄ ▄ ▄█▄ ▄ C▄ B▄ ▄█▄ ▄ ▄█▄ ▄ A█'
-  'A█    B█     ▀▄   C█D▄E▀▄b▀eB▀z E▄ ▄ B█    A█'
-  'A▀▄    B█      ▀▄▄C█bD▀▀dB▀zE▀▄▀▄▀▄B█E▄▀▄ A▄▀'
-  ' A▀▄    B▀▄       C█D████▄E▀▄bG▀eB▀zE▀▄▀▄a▀zA▀ '
-  '   A█     B▀▄▄▄   C█D███b▀▀▀dB▀zE▀▄▀▄▀A█   '
-  '    A▀▀▄      B▀▀▀C█dB▀▀▀zD████dE▀z▄a▀zA▀▀    '
-  '       A▀▀▄▄▄    C█D████a▀▀▀zA▀▀       '
-  '            A▀▀▀▀▀▀▀▀▀            '
-  '         A▄▄▄▀▀▀▀b▀z▀▀▀▀▄▄▄         '
-  '      A▄▀▀       B▄       A▀▀▄      '
-  '   A▄▀▀    B▄▄▄▀▀▀█▀▀▀▄▄▄    A▀▀▄   '
-  '  A▄▀    B▄▀      ▄      ▀▄    A▀▄  '
-  ' A█    B▄▀      ▄▄▄▄▄      ▀▄    A█ '
-  'A█    B▄▀     ▄▀  ▄  ▀▄     ▀▄    A█'
-  'A█ B▄ ▄█▄ ▄ ▄█▄ ▄ C▄ B▄ ▄█▄ ▄ ▄█▄ ▄ A█'
-  'A█    B█     ▀▄  C█bD▀zE▄ ▄B▄▀     █    A█'
-  'A▀▄    B█      ▀C█bD▀▀zB▄bE▀eB▀zE▀▄    B█    A▄▀'
-  ' A▀▄    B▀▄    C█D██b▀z█E▀▄▀▄▀▄bG▀eB▀z    A▄▀ '
-  '   A█     B▀▄▄C█D███b▀z█dE▀z▄b▀zB▄bE▀eB▀zE▀▄▀▄ A█   '
-  '    A▀▀▄    C█D█dB▀▀▀z█d▀▀e▀zE▀▄▀▄▀▄a▀zA▀▀    '
-  '       A▀▀▄aC▀D▀z████b▀z███E▀A▄aE▀zA▄▀▀       '
-  '            A▀▀▀▀▀▀▀▀▀            '
-  '         A▄▄▄▀▀▀▀b▀z▀▀▀▀▄▄▄         '
-  '      A▄▀▀       B▄       A▀▀▄      '
-  '   A▄▀▀    B▄▄▄▀▀▀█▀▀▀▄▄▄    A▀▀▄   '
-  '  A▄▀    B▄▀      ▄      ▀▄    A▀▄  '
-  ' A█    B▄▀      ▄▄▄▄▄      ▀▄    A█ '
-  'A█    B▄▀     ▄▀  ▄  ▀▄     ▀▄    A█'
-  'A█ B▄ ▄█▄ ▄ ▄█▄ ▄ C▄ B▄ ▄█▄ ▄ ▄█▄ ▄ A█'
-  'A█    B█     ▀▄C▄d▀▀bE▀z▄  B▄▀     █    A█'
-  'A▀▄    B█   C▄▄d▀B▀bD▀▀E▀zB▄bE▀zB▀      █    A▄▀'
-  ' A▀▄    B▀C▄d▀zD█████E▄b▀z▄▀▄    bG▀zB▀    A▄▀ '
-  '   A█ C▄d▀▀zD█dB▀bD▀▀▀z██E▄b▀z▄▀▄b▀zB▄▄▀     A█   '
-  '    A▀▀aD▀z██████dB▀z▀e▀z█e▀z▀e▀zE▀▄▀▄  A▄▀▀    '
-  '       A▀▀aD▀▀▀z██E▀▄b▀z▄▀▄▀A▄aE▀zA▄▀▀       '
-  '            A▀▀▀▀▀▀▀▀▀            '
-  '         A▄▄▄▀▀▀▀b▀z▀▀▀▀▄▄▄         '
-  '      A▄▀▀       B▄       A▀▀▄      '
-  '   A▄▀▀    B▄▄▄▀▀▀█▀▀▀▄▄▄    A▀▀▄   '
-  '  A▄▀    B▄▀      ▄      ▀▄    A▀▄  '
-  ' A█    B▄▀      ▄▄▄▄▄      ▀▄    A█ '
-  'A█    B▄▀     ▄▀  ▄  ▀▄     ▀▄    A█'
-  'A█ B▄ ▄█▄ ▄ ▄█▄ ▄C▄▄ B▄ ▄█▄ ▄ ▄█▄ ▄ A█'
-  'A█    B█    C▄cB▀bC▀d▀▀eD▀bE▀z   B▄▀     █    A█'
-  'A▀▄  C▄▄cB▀dC▀▀▀zD███eB▀bE▀zB▄bE▀zB▄▄▀      █    A▄▀'
-  ' A▀aC▀d▀zD███dB▀bF▀zD███▀E▄▀▄b▀z       bG▀zB▀    A▄▀ '
-  '   A█D█████dB▀bD▀zB▄bE▀z▄▀▄b▀z▄  B▄▄▄▀     A█   '
-  '    A▀▀aD▀z██E▄▀▄▀eB▀z▀e▀z█e▀z▀▀      A▄▀▀    '
-  '       A▀▀▄aE▀zA▄E▀▄▀▄b▀z▄   A▄▄▄▀▀       '
-  '            A▀▀▀▀▀▀▀▀▀            '
-  '         A▄▄▄▀▀▀▀b▀z▀▀▀▀▄▄▄         '
-  '      A▄▀▀       B▄       A▀▀▄      '
-  '   A▄▀▀    B▄▄▄▀▀▀█▀▀▀▄▄▄    A▀▀▄   '
-  '  A▄▀    B▄▀      ▄      ▀▄    A▀▄  '
-  ' A█    B▄▀      ▄▄▄▄▄      ▀▄    A█ '
-  'A█    B▄▀     ▄▀  ▄  ▀▄     ▀▄    A█'
-  'A█C▄▄▄▄cB▀zC▄▄▄▄▄cB▀zC▄▄▄▄▄ B▄ ▄█▄ ▄ ▄█▄ ▄ A█'
-  'A█D████B█D█████dB▀bD▀e▀z▀E▄B▄   ▄▀     █    A█'
-  'A▀aD▀z████B█D██e▀z▀E▄▀eB▀bE▀zB▄▄▄▄▀      █    A▄▀'
-  ' A▀aD▀z███▀eB▀bF▀zE▄▀▄▀▄▀ B▄       ▄▀    A▄▀ '
-  '   A█E▀▄▀▄▀eB▀bE▀zB▄bE▀z▄  B▄   ▄▄▄▀     A█   '
-  '    A▀▀aE▀z▄▀▄▀▄▀B▀▀▀█▀▀▀      A▄▀▀    '
-  '       A▀▀▄aE▀zA▄E▀   B▄    A▄▄▄▀▀       '
-  '            A▀▀▀▀▀▀▀▀▀            '
-  '         A▄▄▄▀▀▀▀b▀z▀▀▀▀▄▄▄         '
-  '      A▄▀▀       B▄       A▀▀▄      '
-  '   A▄▀▀    B▄▄▄▀▀▀█▀▀▀▄▄▄    A▀▀▄   '
-  '  A▄▀    B▄▀      ▄      ▀▄    A▀▄  '
-  ' A█dC▀▀z▄▄▄B▀      ▄▄▄▄▄      ▀▄    A█ '
-  'A█D████b▀dB▀C▀▀▀z▄▄B▄▀  ▄  ▀▄     ▀▄    A█'
-  'A█D█b▀z█b▀zB█bD▀z█b▀z█b▀zB█bC▀d▀b▀z▄▄ B▄ ▄█▄ ▄ ▄█▄ ▄ A█'
-  'A█D████B█D▀e▀z▀e▀z▀eB▀bE▀z▄▀ B▄   ▄▀     █    A█'
-  'A▀▄E▀▄▀▄B█E▄▀▄▀▄▀B▀▄▄▄▄▄▀      █    A▄▀'
-  ' A▀aE▀z▄▀▄▀eB▀bG▀zE▄▀     B▄       ▄▀    A▄▀ '
-  '   A█E▀▄▀▄▀B▀▄▄▄   ▄   ▄▄▄▀     A█   '
-  '    A▀▀aE▀z      B▀▀▀█▀▀▀      A▄▀▀    '
-  '       A▀▀▄▄▄    B▄    A▄▄▄▀▀       '
-  '            A▀▀▀▀▀▀▀▀▀            '
-  '         A▄▄▄▀▀▀▀b▀z▀▀▀▀▄▄▄         '
-  '      A▄▀▀       B▄       A▀▀▄      '
-  '   A▄d▀c▀zD▄   B▄▄▄▀▀▀█▀▀▀▄▄▄    A▀▀▄   '
-  '  A▄d▀zD██dC▀▀z▄B▀      ▄      ▀▄    A▀▄  '
-  ' A█D████b▀dB▀zD█dC▀z▄▄  B▄▄▄▄▄      ▀▄    A█ '
-  'A█eD▀z███b▀dB▀zD█████bC▀cB▀z  ▄  ▀▄     ▀▄    A█'
-  'A█E▄b▀z▄b▀zB█bE▀z▄b▀eD▀b▀zB█bD▀e▀bC▀e▀z▄ B▄ ▄█▄ ▄ ▄█▄ ▄ A█'
-  'A█E▄▀▄▀B█E▀▄▀▄▀eB▀bE▀z   B▄   ▄▀     █    A█'
-  'A▀▄E▀▄▀▄B█E▄▀    B▀▄▄▄▄▄▀      █    A▄▀'
-  ' A▀aE▀z▄▀  B▀bG▀z       B▄       ▄▀    A▄▀ '
-  '   A█     B▀▄▄▄   ▄   ▄▄▄▀     A█   '
-  '    A▀▀▄      B▀▀▀█▀▀▀      A▄▀▀    '
-  '       A▀▀▄▄▄    B▄    A▄▄▄▀▀       '
-  '            A▀▀▀▀▀▀▀▀▀            '
-  '         A▄▄▄▀▀▀▀b▀z▀▀▀▀▄▄▄         '
-  '      A▄d▀▀zD█dC▀z▄    B▄       A▀▀▄      '
-  '   A▄d▀▀zD███f▀b▀C▀z▄B▀▀▀█▀▀▀▄▄▄    A▀▀▄   '
-  '  A▄e▀zD▀███b▀dB▀zD██dC▀z▄  B▄      ▀▄    A▀▄  '
-  ' A█E▀▄▀▄b▀eB▀zD▀████dC▀z▄B▄▄▄▄      ▀▄    A█ '
-  'A█E▄▀▄▀B▄▀E▄▀▄▀eD▀b▀dB▀C▀z▄B▄  ▀▄     ▀▄    A█'
-  'A█E▄b▀z▄b▀zB█bE▀z▄b▀z▄b▀zB█bE▀z▄b▀eC▀z▄ B▄ ▄█▄ ▄ ▄█▄ ▄ A█'
-  'A█ E▀ ▀B█E▀    B▀▄   ▄   ▄▀     █    A█'
-  'A▀▄    B█      ▀▄▄▄▄▄▀      █    A▄▀'
-  ' A▀▄    B▀bG▀z       B▄       ▄▀    A▄▀ '
-  '   A█     B▀▄▄▄   ▄   ▄▄▄▀     A█   '
-  '    A▀▀▄      B▀▀▀█▀▀▀      A▄▀▀    '
-  '       A▀▀▄▄▄    B▄    A▄▄▄▀▀       '
-  '            A▀▀▀▀▀▀▀▀▀            '
-  '         A▄▄▄▀▀▀▀b▀z▀▀▀▀▄▄▄         '
-  '      A▄▀▀       B▄       A▀▀▄      '
-  '   A▄▀▀    B▄▄▄▀▀▀█▀▀▀▄▄▄    A▀▀▄   '
-  '  A▄▀    B▄▀      ▄      ▀▄    A▀▄  '
-  ' A█    B▄▀      ▄▄▄▄▄      ▀▄    A█ '
-  'A█    B▄▀     ▄▀  ▄  ▀▄     ▀▄    A█'
-  'A█ B▄ ▄█▄ ▄ ▄█▄ ▄ ▄ ▄ ▄█▄ ▄ ▄█▄ ▄ A█'
-  'A█    B█     ▀▄   ▄   ▄▀     █    A█'
-  'A▀▄    B█      ▀▄▄▄▄▄▀      █    A▄▀'
-  ' A▀▄    B▀▄       ▄       ▄▀    A▄▀ '
-  '   A█     B▀▄▄▄   ▄   ▄▄▄▀     A█   '
-  '    A▀▀▄      B▀▀▀█▀▀▀      A▄▀▀    '
-  '       A▀▀▄▄▄    B▄    A▄▄▄▀▀       '
-  '            A▀▀▀▀▀▀▀▀▀            '
-)
-MARK_N=16 MARK_END=16 MARK_H=14 MARK_W=33
-MARK_TONES=("$C_BAR" "$C_FRAME" "$MARK_COLOR" "$C_LABEL" "$C_FRAME" 46 28)  # A〜G の色。ブリップ（反応）はどの配色でも緑
 
 # 色コードを最初に作っておく（${F[51]} などで使う）。描画のたびに $(...) を起動すると遅いため
-F=() BG=()
-for i in {0..255}; do printf -v "F[$i]" '\033[38;5;%sm' "$i"; printf -v "BG[$i]" '\033[48;5;%sm' "$i"; done
-BG_OFF=$'\033[49m'
-MARK_K=0                             # 今のマークのコマ
+F=()
+for i in {0..255}; do printf -v "F[$i]" '\033[38;5;%sm' "$i"; done
 
 COLS=${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}
 ROWS=${LINES:-$(tput lines 2>/dev/null || echo 24)}
 
 # ── 値の取得 ──────────────────────────────────
-# nvidia-smi は遅いので最初に裏で走らせ、待ち時間をマークの演出で隠す
+# nvidia-smi は遅いので最初に裏で走らせ、待ち時間を光の演出で隠す
 GPU_TMP=$(mktemp)
-trap '[[ -t 1 ]] && tput cnorm 2>/dev/null; rm -f "$GPU_TMP"' EXIT
+STTY_SAVED=
+trap '[[ -t 1 ]] && tput cnorm 2>/dev/null; [[ -n $STTY_SAVED ]] && stty "$STTY_SAVED" 2>/dev/null; rm -f "$GPU_TMP"' EXIT
 GPU_PID=
 if command -v nvidia-smi >/dev/null 2>&1; then
   nvidia-smi --query-gpu=memory.used,memory.total,temperature.gpu \
@@ -305,20 +63,38 @@ cpu_sample() {  # 合計と待機の jiffies
 }
 read -r CPU_T0 CPU_I0 < <(cpu_sample)
 
+BANNER_TEXT=${BANNER_TEXT:-WELCOME TO|YOUR WORLD}   # 大きく出す言葉。| で2行に分ける（入りきらなければ1行にする）
+pc_name() {  # この PC の機種名（例: THINKPAD X1 CARBON）。取れなければ OS の名前
+  local f n
+  for f in /sys/class/dmi/id/product_family /sys/class/dmi/id/product_name; do
+    n=""
+    [[ -r $f ]] && n=$(<"$f")
+    case ${n,,} in  # メーカーが埋めていない値は使わない
+      "" | *"to be filled"* | *"default string"* | *"system product name"* | *"not specified"* | none) n="" ;;
+    esac
+    [[ -n $n ]] && break
+  done
+  [[ -z $n && -r /etc/os-release ]] && n=$(. /etc/os-release && echo "${PRETTY_NAME:-$NAME}")
+  echo "${n^^}"
+}
+BOX_TITLE=${BOX_TITLE-$(pc_name)}          # 四角のタイトル。既定はこの PC の機種名。BOX_TITLE= で線だけ
 # ゲージごとに ラベル / 割合（-1 は取得できず）/ 右に出す文字 / WARNING なら 1
 LABEL=(CPU MEM DISK GPU BAT)
-PCT=() INFO=() WARN=()
+PCT=(100 100 100 100 100) INFO=() WARN=()  # 値を測る前は、四角を「CHECKING」で描くため仮に 100 にしておく
+BOX_H=$(( ${#LABEL[@]} + 2 ))
+BOX_PAD=(0 0 0 0 0 0)                      # 四角の中の空の行数（上端、各ゲージの下）。16:9 に合わせて増やす
 
 collect() {
   local t1 i1 dt v total avail used tot temp cap ac bat acp
 
   read -r t1 i1 < <(cpu_sample)
   dt=$((t1 - CPU_T0))
-  if (( dt < 16 )); then  # 演出を飛ばして間隔が短すぎたときは少し待って測り直す
-    sleep 0.1
+  for _ in 1 2 3 4 5; do  # 測る間隔が短すぎる（1行の要約や、演出を飛ばしたとき）ときだけ、少しずつ待って測り直す
+    (( dt >= 16 )) && break
+    sleep 0.02
     read -r t1 i1 < <(cpu_sample)
     dt=$((t1 - CPU_T0))
-  fi
+  done
   v=0; (( dt > 0 )) && v=$(( (dt - (i1 - CPU_I0)) * 100 / dt ))
   PCT[0]=$v INFO[0]="$v%" WARN[0]=0
 
@@ -367,46 +143,6 @@ noisy() {  # $1=文字列 $2=ノイズ率(0〜100)
   printf '%s' "$out"
 }
 
-mark_draw() {  # $1=コマ番号 $2=すべてのクラスをこの色で描く（省略すると MARK_TONES の色）。MARK_H 行描く
-  local r line i c tone cls=ABCDEFG
-  for ((r = 0; r < MARK_H; r++)); do
-    line=${MARK_FRAMES[$1 * MARK_H + r]}
-    for ((i = 0; i < ${#cls}; i++)); do
-      c=${cls:i:1} tone=${2:-${MARK_TONES[i]}}
-      line=${line//$c/${F[tone]}}
-      line=${line//${c,}/${BG[tone]}}
-    done
-    line=${line//z/$BG_OFF}
-    printf '  %s%s\n' "$line" "$R"
-  done
-}
-
-mark_fade() {  # 暗い灰色から順に塗り直してフェードインさせる
-  local col first=1
-  for col in 236 238 240 243; do
-    (( first )) || printf '\033[%dA' "$MARK_H"
-    first=0
-    mark_draw 0 "$col"
-    pause 0.06
-  done
-  printf '\033[%dA' "$MARK_H"
-  mark_draw 0
-}
-
-move_rows() {  # $1 行だけカーソルを上へ（負なら下へ）
-  if (( $1 > 0 )); then printf '\033[%dA' "$1"
-  elif (( $1 < 0 )); then printf '\033[%dB' $(( -$1 ))
-  fi
-}
-
-spin() {  # $1=マークの上端から今のカーソルまでの行数 $2=描くコマ（省略すると1コマ進める）。カーソルを元の行の先頭に戻す
-  MARK_K=${2:-$(( (MARK_K + 1) % MARK_N ))}
-  printf '\r'  # 行の途中から上へ移ると、マークの1行目が右にずれて描かれるため
-  move_rows "$1"
-  mark_draw "$MARK_K"
-  move_rows $(( MARK_H - $1 ))
-}
-
 gauge_row() {  # $1=番号 $2=今の埋まり具合 $3=行頭（字下げかカーソル位置）
   local k=$1 f=$2 pre=$3 target=0 on="" off="" st col bold="" bar=$C_BAR info="" i
   if (( PCT[k] >= 0 )); then
@@ -432,57 +168,152 @@ hline() {  # $1=変数名 $2=本数。横線を並べて変数に入れる
   printf -v "$1" '%s' "$out"
 }
 
+box_pad() {  # $1=行頭 $2=何番目のすき間か。BOX_PAD の数だけ空の行を描く
+  local i
+  for ((i = 0; i < ${BOX_PAD[$2]:-0}; i++)); do printf '%s%s│%*s│%s\n' "$1" "${F[C_FRAME]}" $(( W + 25 )) "" "$R"; done
+}
+
 gauge_frame() {  # $1=ステップ数（序盤ほどタイトルが崩れる） $2=行頭
   local s=$1 pre=$2 p=$(( 60 - $1 * 10 )) k
   (( p < 0 )) && p=0
-  printf '%s%s┌─ %s%s%s%s %s┐%s\n' \
-    "$pre" "${F[C_FRAME]}" "${F[C_TITLE]}$BOLD" "$(noisy "PRE-FLIGHT CHECK" $p)" "$R" "${F[C_FRAME]}" "$TOP_LINE" "$R"
-  for k in "${!LABEL[@]}"; do gauge_row "$k" $(( s - k * 2 )) "$pre"; done
+  box_top "$pre" "$(noisy "$BOX_TITLE" $p)"
+  box_pad "$pre" 0
+  for k in "${!LABEL[@]}"; do gauge_row "$k" $(( s - k * 2 )) "$pre"; box_pad "$pre" $(( k + 1 )); done
   printf '%s%s└%s┘%s\n' "$pre" "${F[C_FRAME]}" "$BOTTOM_LINE" "$R"
 }
 
-gauges() {  # $1=行頭 $2=マークの位置（right: マークの右 / below: マークの下 / none: マークなし）
-  # right と below では、呼ぶ前にマークを描き終えてカーソルをその次の行に置いておく。
-  # 毎フレーム、マークの上端までカーソルを戻してマークを1コマ進め、続けてゲージを描き直す
-  local s last=$(( W + (${#LABEL[@]} - 1) * 2 )) box_h=$(( ${#LABEL[@]} + 2 )) cur=$MARK_H
-  hline TOP_LINE $(( W + 6 ))
+gauges() {  # $1=行頭。カーソルを四角の上端に置いて呼ぶ。ゲージを1マスずつ伸ばしながら四角を描き直す
+  local s last=$(( W + (${#LABEL[@]} - 1) * 2 ))
+  hline TOP_LINE $(( W + 22 - ${#BOX_TITLE} ))
   hline BOTTOM_LINE $(( W + 25 ))
   for ((s = 0; s <= last; s++)); do
-    if [[ $2 == none ]]; then
-      (( s > 0 )) && printf '\033[%dA' "$box_h"
-    else
-      printf '\033[%dA' "$cur"
-      MARK_K=$(( s % MARK_N ))
-      mark_draw "$MARK_K"
-      if [[ $2 == right ]]; then  # ゲージ枠はマークの BOX_TOP 行目から
-        printf '\033[%dA' $(( MARK_H - BOX_TOP ))
-        cur=$(( BOX_TOP + box_h ))
-      else
-        echo
-        cur=$(( MARK_H + 1 + box_h ))
-      fi
-    fi
+    (( SKIP )) && s=$last  # キーが押されたら伸びきった状態へ
+    (( s > 0 )) && printf '\033[%dA' "$BOX_H"
     gauge_frame "$s" "$1"
     pause "$GAUGE_STEP"
   done
+}
+
+fx_size() {  # 光の範囲 FX_W 列 × FX_H 行と、その左端の列 FX_COL を決める
+  # 窓の横幅に合わせた 16:9（1文字は縦2ドット、ドットの縦横比 1.25 で補正）。
+  # 光が消えたあと、同じ範囲に大きな文字と四角が入り、その下に日付などが出る。高さが足りなければ幅を縮める
+  local room=$(( ROWS - 4 ))
+  FX_W=$(( COLS - 4 ))
+  FX_H=$(( FX_W * 9 / 40 ))
+  if (( FX_H > room )); then FX_H=$room FX_W=$(( room * 40 / 9 )); fi
+  FX_COL=$(( (COLS - FX_W) / 2 + 1 ))
+}
+
+tunnel_play() {  # 光のトンネルを流し、流した範囲を消してその先頭にカーソルを置く。流せなければ 1 を返す
+  local w=$FX_W h=$FX_H k n off=$FX_COL cache gen="$HERE/tools/gen_tunnel.py" fr
+  (( w >= 40 && h >= 9 )) && command -v python3 >/dev/null 2>&1 || return 1
+  cache=${XDG_CACHE_HOME:-$HOME/.cache}/terminal-welcome/tunnel-${w}x${h}.txt
+  if [[ ! -s $cache || $gen -nt $cache ]]; then
+    mkdir -p "${cache%/*}" && python3 "$gen" --cols "$w" --rows "$h" >"$cache" 2>/dev/null || return 1
+    # 窓の大きさごとに増えるので、新しい 5 つだけ残す
+    local old
+    mapfile -t old < <(ls -t "${cache%/*}"/tunnel-*.txt 2>/dev/null | tail -n +6)
+    (( ${#old[@]} )) && rm -f "${old[@]}"
+  fi
+  mapfile -t fr <"$cache"
+  n=$(( ${#fr[@]} / h ))
+  for ((k = 0; k < h; k++)); do echo; done
+  for ((k = 0; k < n; k++)); do
+    (( SKIP )) && k=$(( n - 1 ))  # キーが押されたら最後のコマへ
+    printf '\033[%dA' "$h"
+    printf "\033[${off}G%s\n" "${fr[@]:k*h:h}"
+    pause "$FX_STEP"
+  done
+  printf '\033[%dA\033[J' "$h"
+}
+
+banner_make() {  # $1=使える幅 $2=使える行数。大きな文字を BANNER（行の配列）と BANNER_W（幅）に入れる
+  # toilet の大きい書体で2行 → 細い書体で1行 → 普通の文字、の順に、入るものを使う
+  local font text lines line w
+  BANNER=() BANNER_W=0
+  if command -v toilet >/dev/null 2>&1; then
+    for font in mono9 future; do
+      lines=()
+      if [[ $font == mono9 ]]; then
+        IFS='|' read -ra parts <<<"$BANNER_TEXT"
+        for text in "${parts[@]}"; do
+          (( ${#lines[@]} )) && lines+=("")
+          while IFS= read -r line; do [[ $line == *[^\ ]* ]] && lines+=("${line%"${line##*[^ ]}"}"); done \
+            < <(toilet -f "$font" -w 1000 "$text" 2>/dev/null)
+        done
+      else
+        while IFS= read -r line; do [[ $line == *[^\ ]* ]] && lines+=("${line%"${line##*[^ ]}"}"); done \
+          < <(toilet -f "$font" -w 1000 "${BANNER_TEXT//|/ }" 2>/dev/null)
+      fi
+      w=0
+      for line in "${lines[@]}"; do (( ${#line} > w )) && w=${#line}; done
+      if (( w > 0 && w <= $1 && ${#lines[@]} <= $2 )); then BANNER=("${lines[@]}") BANNER_W=$w; return; fi
+    done
+  fi
+  BANNER=("${BANNER_TEXT//|/ }") BANNER_W=${#BANNER[0]}
+}
+
+banner_draw() {  # $1=行頭 $2=色（省略すると四角のタイトルと同じ色）
+  local line
+  for line in "${BANNER[@]}"; do printf '%s%s%s%s%s\n' "$1" "${F[${2:-$C_TITLE}]}" "$BOLD" "$line" "$R"; done
+}
+
+banner_fade() {  # $1=行頭。大きな文字を暗い灰色から順に塗り直してフェードインさせる。カーソルは文字の下に置く
+  local col first=1
+  for col in 236 238 241 245 ""; do
+    (( first )) || printf '\033[%dA' "${#BANNER[@]}"
+    first=0
+    banner_draw "$1" "$col"
+    pause 0.05
+  done
+}
+
+box_grow() {  # $1=行頭。細い長方形（タイトルがあればタイトルだけ）をフェードインさせ、中身の行数まで縦に伸ばす。カーソルは四角の上端に戻す
+  local col k i
+  hline TOP_LINE $(( W + 22 - ${#BOX_TITLE} ))
+  hline BOTTOM_LINE $(( W + 25 ))
+  for col in 236 238 240 243 "" ; do       # 細い長方形（上下の線だけ）のフェードイン
+    box_shell "$1" 0 "$col"
+    printf '\033[2A'
+    pause 0.05
+  done
+  for ((k = 1; k <= BOX_H - 2; k++)); do  # 1行ずつ縦に伸びる
+    (( SKIP )) && k=$(( BOX_H - 2 ))
+    box_shell "$1" "$k"
+    printf '\033[%dA' $(( k + 2 ))
+    pause 0.04
+  done
+}
+
+box_top() {  # $1=行頭 $2=タイトル（崩した文字でもよい）。BOX_TITLE が空なら線だけ
+  if [[ -z $BOX_TITLE ]]; then
+    printf '%s%s┌%s┐%s\n' "$1" "${F[C_FRAME]}" "$BOTTOM_LINE" "$R"
+  else
+    printf '%s%s┌─ %s%s%s%s %s┐%s\n' "$1" "${F[C_FRAME]}" "${F[C_TITLE]}$BOLD" "$2" "$R" "${F[C_FRAME]}" "$TOP_LINE" "$R"
+  fi
+}
+
+box_shell() {  # $1=行頭 $2=中の空の行数 $3=色（省略すると本来の色）。タイトルと枠だけの四角を描く
+  local i
+  if [[ -n $3 ]]; then local C_FRAME=$3 C_TITLE=$3; fi
+  box_top "$1" "$BOX_TITLE"
+  for ((i = 0; i < $2; i++)); do printf '%s%s│%*s│%s\n' "$1" "${F[C_FRAME]}" $(( W + 25 )) "" "$R"; done
+  printf '%s%s└%s┘%s\n' "$1" "${F[C_FRAME]}" "$BOTTOM_LINE" "$R"
 }
 
 date_line() {  # $1=行頭
   printf '%s%s//%s ── %s%s\n' "$1" "${F[C_BAR]}" "$(date '+%Y-%m-%d %a' | tr a-z A-Z)" "$(date +%H:%M:%S)" "$R"
 }
 
-go_line() {  # $1=行頭 $2=マークの上端からこの行までの行数（省略時はマークを回さない）。WARNING があれば件数を赤で出す
-  # 文字が崩れている間もマークを回し、最後の文字が出たところで止める
+go_line() {  # $1=行頭。崩れた文字から整って出る。WARNING があれば件数を赤で出す
   local n=0 k msg col=$C_TITLE p
   for k in "${!WARN[@]}"; do (( n += WARN[k] )); done
   if (( n > 0 )); then msg="▲ $n WARNING$( (( n > 1 )) && echo S)" col=$C_WARN
   else msg="▲ ALL SYSTEMS GO"; fi
   for p in 70 40 15; do
     printf '\r%s%s%s%s' "$1" "${F[col]}$BOLD" "$(noisy "$msg" $p)" "$R"
-    [[ -n $2 ]] && spin "$2"
     pause 0.06
   done
-  [[ -n $2 ]] && spin "$2" "$MARK_END"  # 止まったときの絵（円と十字線だけ）にする
   printf '\r%s%s%s%s\n' "$1" "${F[col]}$BOLD" "$msg" "$R"
 }
 
@@ -498,40 +329,79 @@ one_line() {
 }
 
 # ── 本体 ──────────────────────────────────────
-if (( ${WELCOME_LINE:-0} )); then
-  collect
-  one_line
-elif (( COLS >= WIDE_COLS && ROWS >= MARK_H + 4 )); then
-  # マークの右にゲージ。マークの上から BOX_TOP 行目にゲージ枠の上端をそろえる
-  # （以下、マークの上端を 0 行目として、カーソルが何行目にいるかを数えている）
-  BOX_TOP=2
-  pre=$'\033['"$(( 2 + MARK_W + 3 ))G"
+full() {  # 演出つき。光 → 大きな文字 → 四角 → ゲージ → 日付 → GO
+  local col pre extra gap=1 rem i
+  if (( COLS < 29 + MIN_W || ROWS < ${#LABEL[@]} + 5 )); then  # 四角も入らないほど狭ければ1行の要約
+    collect
+    one_line
+    return
+  fi
+  # 演出中に打ったキーが画面に出て絵が崩れないよう、文字の表示を止める（終わったら戻す）
+  if [[ -t 0 ]]; then
+    STTY_SAVED=$(stty -g 2>/dev/null) && stty -echo 2>/dev/null
+  fi
+  fx_size
   echo
-  mark_fade
+  if tunnel_play; then
+    # 大きな文字・すき間1行・四角を合わせて、光と同じ FX_W 列 × FX_H 行（16:9）にする。
+    # 四角は光と同じ幅にそろえる（バーの長さで調整）。バーが長くても伸びきるまでの時間は変わらないよう、1マスの間隔を縮める
+    W=$(( FX_W - 27 ))
+    printf -v GAUGE_STEP '0.%03d' $(( 600 / W ))
+    col=$FX_COL
+    banner_make "$FX_W" $(( FX_H - 1 - BOX_H ))
+    # 余った行は、四角の中のすき間（上端・ゲージの間・下端）に上下対称になるよう配る。割り切れない1行は文字と四角の間へ
+    extra=$(( FX_H - ${#BANNER[@]} - 1 - BOX_H ))
+    for i in "${!BOX_PAD[@]}"; do BOX_PAD[i]=$(( extra / 6 )); done
+    rem=$(( extra % 6 ))
+    if (( rem >= 4 )); then for i in 1 2 3 4; do (( BOX_PAD[i]++ )); done; rem=$(( rem - 4 )); fi
+    if (( rem >= 2 )); then (( BOX_PAD[0]++, BOX_PAD[5]++ )); rem=$(( rem - 2 )); fi
+    gap=$(( gap + rem ))
+    BOX_H=$(( BOX_H + extra - rem ))
+  else  # 光を流せない（狭い、python3 がない）ときは四角だけ。大きな文字は入れば出す
+    (( COLS - 29 < W )) && W=$(( COLS - 29 ))
+    col=3
+    banner_make $(( W + 27 )) $(( ROWS - BOX_H - 4 ))
+    (( BANNER_W > W + 27 || ROWS < BOX_H + 4 + ${#BANNER[@]} )) && BANNER=()
+  fi
+  pre=$'\033['"${col}G"
+  BOX_TITLE=${BOX_TITLE:0:W+18}  # 四角の幅に入りきらないタイトルは切る
+  if (( ${#BANNER[@]} )); then
+    banner_fade $'\033['"$(( col + (W + 27 - BANNER_W) / 2 ))G"
+    for ((i = 0; i < gap; i++)); do echo; done
+  fi
   collect
-  gauges "$pre" right                    # → BOX_TOP + 7 行目
-  echo
+  box_grow "$pre"
+  gauges "$pre"
   date_line "$pre"
-  go_line "$pre" $(( BOX_TOP + 9 ))      # → BOX_TOP + 10 行目
-  printf '\033[%dB\n' $(( MARK_H - BOX_TOP - ${#LABEL[@]} - 5 ))
-elif (( COLS >= NARROW_COLS && ROWS >= MARK_H + ${#LABEL[@]} + 10 )); then
-  # マークの下にゲージ
-  echo
-  mark_fade
-  collect
-  gauges "  " below                      # → MARK_H + 8 行目
-  echo
-  date_line "  "
-  go_line "  " $(( MARK_H + 10 ))        # → MARK_H + 11 行目
-  echo
-elif (( COLS >= 29 + MIN_W && ROWS >= ${#LABEL[@]} + 5 )); then
-  # マークが入りきらないのでゲージだけ。幅が足りなければバーを縮める
-  (( COLS - 29 < W )) && W=$(( COLS - 29 ))
-  collect
-  gauges "  " none
-  date_line "  "
-  go_line "  "
-else
-  collect
-  one_line
-fi
+  go_line "$pre"
+}
+
+auto_mode() {  # 起動ごとに変わる ID（boot_id）を記録しておき、同じなら2回目以降とみなす
+  local stamp=${XDG_CACHE_HOME:-$HOME/.cache}/terminal-welcome/boot boot
+  boot=$(</proc/sys/kernel/random/boot_id) 2>/dev/null || { echo full; return; }
+  if [[ $(<"$stamp") == "$boot" ]] 2>/dev/null; then
+    echo line
+  else
+    mkdir -p "${stamp%/*}" && echo "$boot" >"$stamp"
+    echo full
+  fi
+}
+
+main() {
+  local mode=full
+  (( ${WELCOME_LINE:-0} )) && mode=line
+  case ${1:-} in
+    --full) mode=full ;;
+    --line) mode=line ;;
+    --auto) mode=$(auto_mode) ;;
+    -h | --help) sed -n '2,/^HERE=/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//'; return ;;
+  esac
+  if [[ $mode == line ]]; then
+    collect
+    one_line
+  else
+    full
+  fi
+}
+
+main "$@"
