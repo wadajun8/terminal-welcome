@@ -21,4 +21,4 @@ for label, k, c, r in [("横並び キーなし", None, 100, 40), ("横並び 0.
                        ("縦並び キーなし", None, 60, 40), ("ゲージだけ キーなし", None, 40, 20),
                        ("ゲージだけ 0.3秒でキー", 0.3, 40, 20)]:
     t, out = run(k, c, r)
-    print(f"{label:22s} {t:.2f}秒  GO: {'あり' if 'ALL SYSTEMS GO' in out or 'WARNING' in out else 'なし'}")
+    print(f"{label:22s} {t:.2f}秒  GO: {'あり' if 'ALL SYSTEMS GO' in out or 'WARNING' in out or 'CAUTION' in out else 'なし'}")

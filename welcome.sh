@@ -15,20 +15,24 @@ source "$HERE/demo/lib.sh"
 SKIP=${WELCOME_SKIP:-0}
 
 # ── 設定 ──────────────────────────────────────
-# 配色（256色の番号）: 枠 / ゲージ / ラベル / NOMINAL / タイトルと GO / WARNING
+# 配色（256色の番号）: 枠 / ゲージ / ラベル / NOMINAL / タイトルと GO / WARNING / CAUTION
 case ${PALETTE:-tron} in
-  neon)      read -r C_FRAME C_BAR C_LABEL C_OK C_TITLE C_WARN <<<'93 51 213 87 201 196' ;;
-  synthwave) read -r C_FRAME C_BAR C_LABEL C_OK C_TITLE C_WARN <<<'97 208 205 228 199 196' ;;
-  matrix)    read -r C_FRAME C_BAR C_LABEL C_OK C_TITLE C_WARN <<<'22 40 28 157 46 196' ;;
-  akira)     read -r C_FRAME C_BAR C_LABEL C_OK C_TITLE C_WARN <<<'88 203 167 255 196 226' ;;
-  vapor)     read -r C_FRAME C_BAR C_LABEL C_OK C_TITLE C_WARN <<<'104 159 218 195 213 203' ;;
-  amber)     read -r C_FRAME C_BAR C_LABEL C_OK C_TITLE C_WARN <<<'130 214 172 230 220 196' ;;
-  *)         read -r C_FRAME C_BAR C_LABEL C_OK C_TITLE C_WARN <<<'24 45 31 255 51 208' ;;  # tron（採用）
+  neon)      read -r C_FRAME C_BAR C_LABEL C_OK C_TITLE C_WARN C_CAUTION <<<'93 51 213 87 201 196 226' ;;
+  synthwave) read -r C_FRAME C_BAR C_LABEL C_OK C_TITLE C_WARN C_CAUTION <<<'97 208 205 228 199 196 226' ;;
+  matrix)    read -r C_FRAME C_BAR C_LABEL C_OK C_TITLE C_WARN C_CAUTION <<<'22 40 28 157 46 196 226' ;;
+  akira)     read -r C_FRAME C_BAR C_LABEL C_OK C_TITLE C_WARN C_CAUTION <<<'88 203 167 255 196 226 214' ;;
+  vapor)     read -r C_FRAME C_BAR C_LABEL C_OK C_TITLE C_WARN C_CAUTION <<<'104 159 218 195 213 203 226' ;;
+  amber)     read -r C_FRAME C_BAR C_LABEL C_OK C_TITLE C_WARN C_CAUTION <<<'130 214 172 230 220 196 226' ;;
+  *)         read -r C_FRAME C_BAR C_LABEL C_OK C_TITLE C_WARN C_CAUTION <<<'24 45 31 255 51 196 226' ;;  # tron（採用）
 esac
 C_DIM=238 C_TEXT=255                 # 空のゲージ・OFFLINE / 数値の文字
 W=12                                # ゲージの長さ
+# しきい値。ゲージの色が シアン（通常）→ 黄（CAUTION）→ 赤（WARNING）と変わる
+CAUTION_MEM=80 CAUTION_DISK=80       # 以上で CAUTION
 WARN_MEM=90 WARN_DISK=90             # 以上で WARNING
+CAUTION_BAT=30                       # 以下かつ AC 電源なしで CAUTION
 WARN_BAT=20                          # 以下かつ AC 電源なしで WARNING
+CAUTION_GPU_TEMP=75                  # 以上で CAUTION（℃）
 WARN_GPU_TEMP=85                     # 以上で WARNING（℃）
 MIN_W=4                              # 狭いときに縮めるゲージの最短の長さ
 GAUGE_STEP=0.05                      # ゲージが1マス進む間隔（秒）。光の幅に合わせてバーを伸ばすときは、伸びきる時間が同じになるよう縮める
@@ -76,11 +80,24 @@ pc_name() {  # この PC の機種名（例: THINKPAD X1 CARBON）。取れな�
   echo "${n^^}"
 }
 BOX_TITLE=${BOX_TITLE-$(pc_name)}          # 四角のタイトル。既定はこの PC の機種名。BOX_TITLE= で線だけ
-# ゲージごとに ラベル / 割合（-1 は取得できず）/ 右に出す文字 / WARNING なら 1
+# ゲージごとに ラベル / 割合（-1 は取得できず）/ 右に出す文字 / 段階（0=通常 1=CAUTION 2=WARNING）
 LABEL=(CPU MEM DISK GPU BAT)
 PCT=(100 100 100 100 100) INFO=() WARN=()  # 値を測る前は、四角を「CHECKING」で描くため仮に 100 にしておく
 BOX_H=$(( ${#LABEL[@]} + 2 ))
 BOX_PAD=(0 0 0 0 0 0)                      # 四角の中の空の行数（上端、各ゲージの下）。16:9 に合わせて増やす
+
+level() {  # $1=値 $2=CAUTION のしきい値 $3=WARNING のしきい値（以上で判定）。段階を返す（echo せず $? で）
+  (( $1 >= $3 )) && return 2
+  (( $1 >= $2 )) && return 1
+  return 0
+}
+
+level_color() {  # $1=変数名 $2=段階。その段階のゲージの色を変数に入れる
+  local c=$C_BAR
+  (( $2 == 1 )) && c=$C_CAUTION
+  (( $2 == 2 )) && c=$C_WARN
+  printf -v "$1" '%s' "$c"
+}
 
 collect() {
   local t1 i1 dt v total avail used tot temp cap ac bat acp
@@ -98,10 +115,12 @@ collect() {
 
   read -r total avail < <(awk '/^MemTotal/ {t = $2} /^MemAvailable/ {a = $2} END {print t, a}' /proc/meminfo)
   v=$(( (total - avail) * 100 / total ))
-  PCT[1]=$v INFO[1]="$v%" WARN[1]=$(( v >= WARN_MEM ))
+  level "$v" "$CAUTION_MEM" "$WARN_MEM"
+  PCT[1]=$v INFO[1]="$v%" WARN[1]=$?
 
   v=$(df -P / | awk 'NR == 2 {sub("%", "", $5); print $5}')
-  PCT[2]=$v INFO[2]="$v%" WARN[2]=$(( v >= WARN_DISK ))
+  level "$v" "$CAUTION_DISK" "$WARN_DISK"
+  PCT[2]=$v INFO[2]="$v%" WARN[2]=$?
 
   if [[ -n $GPU_PID ]]; then
     for _ in {1..20}; do kill -0 "$GPU_PID" 2>/dev/null || break; sleep 0.05; done
@@ -110,7 +129,8 @@ collect() {
   IFS=', ' read -r used tot temp <"$GPU_TMP"
   if [[ $used =~ ^[0-9]+$ && $tot =~ ^[0-9]+$ ]] && (( tot > 0 )); then
     [[ $temp =~ ^[0-9]+$ ]] || temp=0
-    PCT[3]=$(( used * 100 / tot )) INFO[3]="${temp}C" WARN[3]=$(( temp >= WARN_GPU_TEMP ))
+    level "$temp" "$CAUTION_GPU_TEMP" "$WARN_GPU_TEMP"
+    PCT[3]=$(( used * 100 / tot )) INFO[3]="${temp}C" WARN[3]=$?
   else
     PCT[3]=-1 INFO[3]="N/A" WARN[3]=0
   fi
@@ -122,7 +142,8 @@ collect() {
     [[ -n $acp ]] && ac=$(<"$acp")
     PCT[4]=$cap INFO[4]="$cap%"
     (( ac == 1 )) && INFO[4]+=" AC"
-    WARN[4]=$(( cap <= WARN_BAT && ac != 1 ))
+    WARN[4]=0
+    if (( ac != 1 )); then level $(( -cap )) $(( -CAUTION_BAT )) $(( -WARN_BAT )); WARN[4]=$?; fi  # 残量は「以下」で判定するので符号を反転
   else
     PCT[4]=-1 INFO[4]="N/A" WARN[4]=0
   fi
@@ -142,7 +163,7 @@ noisy() {  # $1=文字列 $2=ノイズ率(0〜100)
 }
 
 gauge_row() {  # $1=番号 $2=今の埋まり具合 $3=行頭（字下げかカーソル位置）
-  local k=$1 f=$2 pre=$3 target=0 on="" off="" st col bold="" bar=$C_BAR info="" i
+  local k=$1 f=$2 pre=$3 target=0 on="" off="" st col bold="" bar=$C_BAR txt=$C_TEXT info="" i
   if (( PCT[k] >= 0 )); then
     target=$(( (PCT[k] * W + 50) / 100 ))
     (( PCT[k] > 0 && target == 0 )) && target=1
@@ -152,11 +173,14 @@ gauge_row() {  # $1=番号 $2=今の埋まり具合 $3=行頭（字下げかカ�
   for ((i = 0; i < W; i++)); do (( i < f )) && on+="■" || off+="□"; done
   if (( PCT[k] < 0 )); then st=OFFLINE col=$C_DIM info=${INFO[k]}
   elif (( f < target )); then st=CHECKING col=$C_LABEL
-  elif (( WARN[k] )); then st=WARNING col=$C_WARN bar=$C_WARN bold=$BOLD info=${INFO[k]}
+  elif (( WARN[k] )); then  # CAUTION（黄）か WARNING（赤）。バーと右の値もその色にする
+    st=WARNING; (( WARN[k] == 1 )) && st=CAUTION
+    level_color col "${WARN[k]}"
+    bar=$col txt=$col bold=$BOLD info=${INFO[k]}
   else st=NOMINAL col=$C_OK bold=$BOLD info=${INFO[k]}; fi
   printf '%s%s│%s %s%-4s%s %s%s%s%s%s  %s%-7s%s %s%-8s%s %s│%s\n' \
     "$pre" "${F[C_FRAME]}" "$R" "${F[C_LABEL]}" "${LABEL[k]}" "$R" \
-    "${F[bar]}" "$on" "${F[C_DIM]}" "$off" "$R" "${F[C_TEXT]}" "$info" "$R" \
+    "${F[bar]}" "$on" "${F[C_DIM]}" "$off" "$R" "${F[txt]}" "$info" "$R" \
     "${F[col]}$bold" "$st" "$R" "${F[C_FRAME]}" "$R"
 }
 
@@ -299,10 +323,19 @@ date_line() {  # $1=行頭
   printf '%s%s//%s ── %s%s\n' "$1" "${F[C_BAR]}" "$(date '+%Y-%m-%d %a' | tr a-z A-Z)" "$(date +%H:%M:%S)" "$R"
 }
 
-go_line() {  # $1=行頭。崩れた文字から整って出る。WARNING があれば件数を赤で出す
-  local n=0 k msg col=$C_TITLE p
-  for k in "${!WARN[@]}"; do (( n += WARN[k] )); done
-  if (( n > 0 )); then msg="▲ $n WARNING$( (( n > 1 )) && echo S)" col=$C_WARN
+go_line() {  # $1=行頭。崩れた文字から整って出る。WARNING があれば件数を赤で、CAUTION だけなら黄で出す
+  local nw=0 nc=0 k msg col=$C_TITLE p
+  for k in "${!WARN[@]}"; do
+    (( WARN[k] == 2 )) && (( nw++ ))
+    (( WARN[k] == 1 )) && (( nc++ ))
+  done
+  if (( nw > 0 )); then
+    msg="▲ $nw WARNING" col=$C_WARN
+    (( nw > 1 )) && msg+=S
+    (( nc > 0 )) && msg+=", $nc CAUTION" && (( nc > 1 )) && msg+=S
+  elif (( nc > 0 )); then
+    msg="▲ $nc CAUTION" col=$C_CAUTION
+    (( nc > 1 )) && msg+=S
   else msg="▲ ALL SYSTEMS GO"; fi
   for p in 70 40 15; do
     printf '\r%s%s%s%s' "$1" "${F[col]}$BOLD" "$(noisy "$msg" $p)" "$R"
@@ -312,14 +345,17 @@ go_line() {  # $1=行頭。崩れた文字から整って出る。WARNING があ
 }
 
 one_line() {
-  local k out col
+  local k out col lab top=0 mark=$C_TITLE
   for k in "${!LABEL[@]}"; do
     if (( PCT[k] < 0 )); then col=$C_DIM
-    elif (( WARN[k] )); then col=$C_WARN
-    else col=$C_BAR; fi
-    out+="${F[C_LABEL]}${LABEL[k]}$R ${F[col]}${INFO[k]}$R  "
+    else level_color col "${WARN[k]}"; fi  # 値の色は シアン → 黄 → 赤
+    lab=$C_LABEL
+    (( WARN[k] )) && lab=$col  # CAUTION・WARNING のときは項目名も値と同じ色にする
+    (( WARN[k] > top )) && top=${WARN[k]}
+    out+="${F[lab]}${LABEL[k]}$R ${F[col]}${INFO[k]}$R  "
   done
-  printf '%s▲%s %s%s%s\n' "${F[C_TITLE]}$BOLD" "$R" "$out" "${F[C_FRAME]}" "$(date '+%m/%d %H:%M')$R"
+  (( top )) && level_color mark "$top"  # 先頭の ▲ は一番高い段階の色
+  printf '%s▲%s %s%s%s\n' "${F[mark]}$BOLD" "$R" "$out" "${F[C_FRAME]}" "$(date '+%m/%d %H:%M')$R"
 }
 
 # ── 本体 ──────────────────────────────────────

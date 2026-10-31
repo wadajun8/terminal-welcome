@@ -52,15 +52,15 @@ echo '[[ $- == *i* && -t 1 && ${SHLVL:-1} -le 1 ]] && bash ~/terminal-welcome/we
 
 ## 表示されるもの
 
-| 項目 | ゲージ | WARNING になる条件 |
-|---|---|---|
-| CPU | 使用率 | — |
-| MEM | 使用率 | 90% 以上 |
-| DISK | `/` の使用率 | 90% 以上 |
-| GPU | VRAM の使用率（右に温度） | 85℃ 以上 |
-| BAT | 残量（AC 電源につながっていれば `AC`） | 20% 以下で AC 電源なし |
+| 項目 | ゲージ | CAUTION（黄）になる条件 | WARNING（赤）になる条件 |
+|---|---|---|---|
+| CPU | 使用率 | — | — |
+| MEM | 使用率 | 80% 以上 | 90% 以上 |
+| DISK | `/` の使用率 | 80% 以上 | 90% 以上 |
+| GPU | VRAM の使用率（右に温度） | 75℃ 以上 | 85℃ 以上 |
+| BAT | 残量（AC 電源につながっていれば `AC`） | 30% 以下で AC 電源なし | 20% 以下で AC 電源なし |
 
-WARNING があると、最後の行が `▲ N WARNING(S)` になります。GPU やバッテリーがない PC では、その行は `OFFLINE` になります。
+ゲージと値の色は、ふだんはシアン、CAUTION で黄、WARNING で赤になります（1行の要約では、黄・赤のときに項目名も同じ色になります）。WARNING があると最後の行が赤で `▲ N WARNING(S)`、CAUTION だけなら黄で `▲ N CAUTION(S)` になります。GPU やバッテリーがない PC では、その行は `OFFLINE` になります。
 
 ## 必要なもの
 
@@ -85,6 +85,12 @@ bash ~/terminal-welcome/welcome.sh --auto    # 起動して最初の1回だけ�
 bash ~/terminal-welcome/welcome.sh --help    # 使い方
 ```
 
+`--auto` で、再起動せずにもう一度フル演出を出したいときは、起動の記録を消します（次に開いたターミナルでフル演出になります）。
+
+```bash
+rm -f ~/.cache/terminal-welcome/boot
+```
+
 ### カスタマイズ
 
 環境変数で変えられます。
@@ -101,7 +107,7 @@ PALETTE=matrix bash ~/terminal-welcome/welcome.sh   # 配色を変えて見る
 bash ~/terminal-welcome/demo/palettes.sh            # 配色を順に見比べる
 ```
 
-`~/.bashrc` で使うときは、`--auto` の前に書きます（例：`PALETTE=matrix bash ~/terminal-welcome/welcome.sh --auto`）。WARNING のしきい値やゲージの速さは、`welcome.sh` の先頭の「設定」で変えられます。
+`~/.bashrc` で使うときは、`--auto` の前に書きます（例：`PALETTE=matrix bash ~/terminal-welcome/welcome.sh --auto`）。CAUTION・WARNING のしきい値やゲージの速さは、`welcome.sh` の先頭の「設定」で変えられます。
 
 ## アンインストール
 
